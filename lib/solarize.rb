@@ -5,7 +5,7 @@ require 'ooor'
 
 module Sunspot
   module Ooor
-    
+
     def self.backend_to_connection_spec()
       #TODO use some ooor.yml config to match a backend with a connection
     end
@@ -91,10 +91,29 @@ module Sunspot
                 hit.ooor_results(self.ooor_session) #TODO actually pass only the spec
               end)
             end
-            
+
             def search.verified_hits(session)
               hits.select { |h| h.ooor_results(session) }
             end
+
+            #
+            # Populate the Hit objects with their instances. This is invoked the first
+            # time any hit has its instance requested, and all hits are loaded as a
+            # batch.
+            #
+            def search.populate_hits(session)
+              id_hit_hash = Hash.new { |h, k| h[k] = {} }
+              hits.each do |hit|
+                id_hit_hash[hit.class_name][hit.primary_key] = hit
+              end
+              id_hit_hash.each_pair do |class_name, hits|
+                hits_for_class = id_hit_hash[class_name]
+                hits.each do |hit_pair|
+                  hit_pair[1].result = session[class_name].from_solr(hit_pair[1].stored_values)
+                end
+              end
+            end
+
           end
         end
       end
@@ -157,7 +176,7 @@ module Sunspot
           @stored_cache = {}
           @highlights = highlights
         end
-        
+
         def ooor_results(session) #TODO use connection spec instead (hits from several connections)
           return @result if defined?(@result)
           @search.populate_hits(session)
@@ -173,27 +192,14 @@ module Sunspot
           if options[:verify]
             verified_hits
           elsif solr_docs
-            solr_docs.map { |d| OoorHit.new(d, highlights_for(d), self) }
+            # if ooor_session then make a object of ooorhit class because it is a object of ooor else active record
+            if ooor_session
+              solr_docs.map { |d| OoorHit.new(d, highlights_for(d), self) }
+            else
+              solr_docs.map { |d| Sunspot::Search::Hit.new(d, highlights_for(d), self) }
+            end
           else
             []
-          end
-        end
-
-        # 
-        # Populate the Hit objects with their instances. This is invoked the first
-        # time any hit has its instance requested, and all hits are loaded as a
-        # batch.
-        #
-        def populate_hits(session)
-          id_hit_hash = Hash.new { |h, k| h[k] = {} }
-          hits.each do |hit|
-            id_hit_hash[hit.class_name][hit.primary_key] = hit
-          end
-          id_hit_hash.each_pair do |class_name, hits|
-            hits_for_class = id_hit_hash[class_name]
-            hits.each do |hit_pair|
-              hit_pair[1].result = session[class_name].from_solr(hit_pair[1].stored_values)
-            end
           end
         end
 
@@ -241,10 +247,10 @@ module Ooor
       end
     end
   end
-  
+
   module SolrLoader
     extend ActiveSupport::Concern
-              
+
     SCHEMA_SUFFIXES = /_ss$|_texts$|_is$|_its$|_ds$|_dts$|_bins$|_fs$|_bs$|_sms$|_itms$|_ims$/
     module ClassMethods
       def from_solr(stored_values, consumed_keys=[])
@@ -316,7 +322,7 @@ module Ooor
       end
     end
   end
-  
+
   Ooor::Base.send :include, Ooor::SolrLoader
 
   include Ooor::SunspotConfigurator
